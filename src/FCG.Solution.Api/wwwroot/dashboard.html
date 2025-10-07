@@ -90,33 +90,33 @@
 
         function loadProfile(data) {
             const html = `
-                <div class="card shadow-sm">
-                    <div class="card-body">
-                        <h5 class="card-title">👤 Meu Perfil</h5>
-                        <form onsubmit="updateProfile(event)">
-                            <div class="mb-2">
-                                <label>Nome</label>
-                                <input type="text" class="form-control" id="name" value="${data.name}" required>
+                        <div class="card shadow-sm">
+                            <div class="card-body">
+                                <h5 class="card-title">👤 Meu Perfil</h5>
+                                <form onsubmit="updateProfile(event)">
+                                    <div class="mb-2">
+                                        <label>Nome</label>
+                                        <input type="text" class="form-control" id="name" value="${data.name}" required>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label>Email</label>
+                                        <input type="email" class="form-control" id="email" value="${data.email}" required>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label>Perfil</label>
+                                        <input type="text" class="form-control" value="${data.role === 'User' ? 'Usuário' : data.role}" disabled>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary">💾 Salvar Alterações</button>
+                                </form>
+                                <hr>
+                                <h6>🔑 Alterar Senha</h6>
+                                <form onsubmit="changePassword(event)">
+                                    <div class="mb-2"><input type="password" class="form-control" id="currentPassword" placeholder="Senha atual" required></div>
+                                    <div class="mb-2"><input type="password" class="form-control" id="newPassword" placeholder="Nova senha" required></div>
+                                    <button type="submit" class="btn btn-outline-secondary">🔄 Atualizar Senha</button>
+                                </form>
                             </div>
-                            <div class="mb-2">
-                                <label>Email</label>
-                                <input type="email" class="form-control" id="email" value="${data.email}" required>
-                            </div>
-                            <div class="mb-2">
-                                <label>Perfil</label>
-                                <input type="text" class="form-control" value="${data.role === 'User' ? 'Usuário' : data.role}" disabled>
-                            </div>
-                            <button type="submit" class="btn btn-primary">💾 Salvar Alterações</button>
-                        </form>
-                        <hr>
-                        <h6>🔑 Alterar Senha</h6>
-                        <form onsubmit="changePassword(event)">
-                            <div class="mb-2"><input type="password" class="form-control" id="currentPassword" placeholder="Senha atual" required></div>
-                            <div class="mb-2"><input type="password" class="form-control" id="newPassword" placeholder="Nova senha" required></div>
-                            <button type="submit" class="btn btn-outline-secondary">🔄 Atualizar Senha</button>
-                        </form>
-                    </div>
-                </div>`;
+                        </div>`;
             show(html);
         }
 
@@ -172,25 +172,47 @@
                 });
         }
 
-        function listGames() {
-            fetch(`${endpoints.games}/games`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            })
-                .then(r => r.json())
-                .then(games => {
-                    games.sort((a, b) => a.title.localeCompare(b.title));
-                    window.allGames = games;
-
-                    fetch(`${endpoints.users}/me/games`, {
-                        headers: { "Authorization": `Bearer ${token}` }
-                    })
-                        .then(r => r.json())
-                        .then(myGames => {
-                            window.ownedIds = myGames.map(g => g.id);
-                            renderStore(games);
-                            document.getElementById("storeFilter").style.display = "block";
-                        });
+        // ✅ LISTA DE JOGOS (corrigida — sem duplicar /games)
+        async function listGames() {
+            try {
+                const r1 = await fetch(`${endpoints.games}`, { // ✅ corrigido aqui
+                    headers: {
+                        "Authorization": `Bearer ${token}`,
+                        "Content-Type": "application/json"
+                    }
                 });
+
+                if (r1.status === 401) {
+                    alert("❌ Sessão expirada. Faça login novamente.");
+                    localStorage.removeItem("fcg_token");
+                    window.location.href = "login.html";
+                    return;
+                }
+
+                if (!r1.ok) throw new Error(`Erro ${r1.status}: Falha ao carregar lista de jogos.`);
+
+                const games = await r1.json();
+                games.sort((a, b) => a.title.localeCompare(b.title));
+                window.allGames = games;
+
+                const r2 = await fetch(`${endpoints.users}/me/games`, {
+                    headers: {
+                        "Authorization": `Bearer ${token}`,
+                        "Content-Type": "application/json"
+                    }
+                });
+
+                if (!r2.ok) throw new Error("Falha ao carregar sua biblioteca.");
+
+                const myGames = await r2.json();
+                window.ownedIds = myGames.map(g => g.id);
+
+                renderStore(games);
+                document.getElementById("storeFilter").style.display = "block";
+            } catch (err) {
+                console.error("Erro ao listar jogos:", err);
+                alert("❌ Erro ao carregar jogos: " + err.message);
+            }
         }
 
         function buyGame(gameId) {
@@ -257,17 +279,17 @@
             const html = games.map(g => {
                 const alreadyOwned = window.ownedIds.includes(g.id);
                 return `
-                    <div class="card mb-3 shadow-sm border-${alreadyOwned ? 'secondary' : 'primary'}">
-                        <div class="card-body">
-                            <h5 class="card-title">${g.title}</h5>
-                            <p class="card-text">${g.description}</p>
-                            <p><strong>R$${g.price}</strong></p>
-                            <button class="btn btn-${alreadyOwned ? 'secondary' : 'primary'} btn-sm"
-                                    ${alreadyOwned ? 'disabled' : `onclick="buyGame('${g.id}')"`}>
-                                ${alreadyOwned ? '🎮 Já adquirido' : '🎁 Adquirir'}
-                            </button>
-                        </div>
-                    </div>`;
+                            <div class="card mb-3 shadow-sm border-${alreadyOwned ? 'secondary' : 'primary'}">
+                                <div class="card-body">
+                                    <h5 class="card-title">${g.title}</h5>
+                                    <p class="card-text">${g.description}</p>
+                                    <p><strong>R$${g.price}</strong></p>
+                                    <button class="btn btn-${alreadyOwned ? 'secondary' : 'primary'} btn-sm"
+                                            ${alreadyOwned ? 'disabled' : `onclick="buyGame('${g.id}')"`}>
+                                        ${alreadyOwned ? '🎮 Já adquirido' : '🎁 Adquirir'}
+                                    </button>
+                                </div>
+                            </div>`;
             }).join("");
             show(`<h4>🛒 Jogos Disponíveis</h4>${html}`);
         }
@@ -275,17 +297,17 @@
         function renderLibrary(games) {
             const html = games.length > 0
                 ? games.map(g => `
-                    <div class="card mb-3">
-                        <div class="card-body d-flex justify-content-between align-items-center">
-                            <div>
-                                <h5>${g.title}</h5>
-                                <p>${g.description}</p>
-                                <strong>R$${g.price}</strong>
+                            <div class="card mb-3">
+                                <div class="card-body d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <h5>${g.title}</h5>
+                                        <p>${g.description}</p>
+                                        <strong>R$${g.price}</strong>
+                                    </div>
+                                    <button class="btn btn-outline-danger btn-sm" onclick="removeGame('${g.id}')">❌ Remover</button>
+                                </div>
                             </div>
-                            <button class="btn btn-outline-danger btn-sm" onclick="removeGame('${g.id}')">❌ Remover</button>
-                        </div>
-                    </div>
-                `).join("")
+                        `).join("")
                 : "<div class='alert alert-info'>Nenhum jogo adquirido ainda.</div>";
             show(`<h4>📚 Minha Biblioteca</h4>${html}`);
         }

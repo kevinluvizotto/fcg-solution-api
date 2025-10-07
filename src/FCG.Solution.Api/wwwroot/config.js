@@ -2,7 +2,7 @@
 const apiGatewayBase = "https://fcg-apim-fiap-klztt.azure-api.net";
 
 // Endpoints ajustados para a nova estrutura no APIM
-const apiUsers = apiGatewayBase;              
+const apiUsers = `${apiGatewayBase}/users`;              
 const apiGames = `${apiGatewayBase}/games`;   
 const apiPayments = `${apiGatewayBase}/payments`; 
 // Headers padrão

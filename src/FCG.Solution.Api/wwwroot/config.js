@@ -8,7 +8,7 @@ const apiUsers = `${apiGatewayBase}/users`;
 const apiGames = `${apiGatewayBase}/games`;
 const apiPayments = `${apiGatewayBase}/payments`;
 
-// 🔒 Cabeçalhos padrão para requisições autenticadas
+// Cabeçalhos padrão para requisições autenticadas
 function getAuthHeaders() {
     const token = localStorage.getItem("fcg_token");
     return token

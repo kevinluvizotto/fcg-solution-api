@@ -1,0 +1,29 @@
+name: CI - Build and Validate (Solution API)
+
+on:
+  push:
+    branches: [ "development" ]
+  pull_request:
+    branches: [ "development" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 9.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore fcg-solution-api.sln
+
+    - name: Build project
+      run: dotnet build fcg-solution-api.sln --configuration Release --no-restore
+
+    - name: Publish output
+      run: dotnet publish fcg-solution-api.sln -c Release -o out

@@ -1,0 +1,300 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>FCG Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <div class="container mt-5">
+        <h2 class="mb-4 text-primary"><i class="bi bi-controller"></i> FIAP Cloud Games (FCG)</h2>
+
+        <ul class="nav nav-tabs mb-3" id="dashboardTabs">
+            <li class="nav-item"><button class="nav-link active" onclick="showTab('profile')">👤 Meu Perfil</button></li>
+            <li class="nav-item"><button class="nav-link" onclick="showTab('store')">🛒 Loja</button></li>
+            <li class="nav-item"><button class="nav-link" onclick="showTab('library')">📚 Minha Biblioteca</button></li>
+            <li class="nav-item ms-auto"><button class="btn btn-danger" onclick="logout()">🚪 Sair</button></li>
+        </ul>
+
+        <div id="storeFilter" class="mb-3" style="display: none;">
+            <input class="form-control" id="searchInput" placeholder="🔍 Buscar jogo por título" oninput="filterStore()">
+        </div>
+
+        <div id="libraryFilter" class="mb-3" style="display: none;">
+            <input class="form-control" id="librarySearch" placeholder="🔍 Buscar na biblioteca" oninput="filterLibrary()">
+        </div>
+
+        <div id="admin-btn" class="mb-3" style="display: none;">
+            <button class="btn btn-warning" onclick="goToAdmin()"><i class="bi bi-tools"></i> Área Administrativa</button>
+        </div>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        // ✅ CONFIGURAÇÃO CENTRALIZADA PARA O APIM
+        const apimBaseUrl = "https://fcg-apim-fiap-klztt.azure-api.net";
+        const endpoints = {
+            users: `${apimBaseUrl}/users`,
+            games: `${apimBaseUrl}/games`,
+            payments: `${apimBaseUrl}/payments`
+        };
+
+        const token = localStorage.getItem("fcg_token");
+
+        if (!token) {
+            alert("❌ Sessão expirada. Faça login novamente.");
+            window.location.href = "login.html";
+        } else {
+            fetch(`${endpoints.users}/me`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            })
+                .then(r => {
+                    if (!r.ok) throw new Error("Autenticação falhou");
+                    return r.json();
+                })
+                .then(data => {
+                    if (data.role === "Admin") {
+                        document.getElementById("admin-btn").style.display = "block";
+                    }
+                    loadProfile(data);
+                })
+                .catch(err => {
+                    alert("❌ Erro: " + err.message);
+                    localStorage.removeItem("fcg_token");
+                    window.location.href = "login.html";
+                });
+        }
+
+        function showTab(tab) {
+            document.getElementById("storeFilter").style.display = "none";
+            document.getElementById("libraryFilter").style.display = "none";
+
+            if (tab === "profile") getProfile();
+            if (tab === "store") {
+                listGames();
+                document.getElementById("storeFilter").style.display = "block";
+            }
+            if (tab === "library") {
+                myGames();
+                document.getElementById("libraryFilter").style.display = "block";
+            }
+        }
+
+        function getProfile() {
+            fetch(`${endpoints.users}/me`, { headers: { "Authorization": `Bearer ${token}` } })
+                .then(r => r.json())
+                .then(data => loadProfile(data));
+        }
+
+        function loadProfile(data) {
+            const html = `
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <h5 class="card-title">👤 Meu Perfil</h5>
+                        <form onsubmit="updateProfile(event)">
+                            <div class="mb-2">
+                                <label>Nome</label>
+                                <input type="text" class="form-control" id="name" value="${data.name}" required>
+                            </div>
+                            <div class="mb-2">
+                                <label>Email</label>
+                                <input type="email" class="form-control" id="email" value="${data.email}" required>
+                            </div>
+                            <div class="mb-2">
+                                <label>Perfil</label>
+                                <input type="text" class="form-control" value="${data.role === 'User' ? 'Usuário' : data.role}" disabled>
+                            </div>
+                            <button type="submit" class="btn btn-primary">💾 Salvar Alterações</button>
+                        </form>
+                        <hr>
+                        <h6>🔑 Alterar Senha</h6>
+                        <form onsubmit="changePassword(event)">
+                            <div class="mb-2"><input type="password" class="form-control" id="currentPassword" placeholder="Senha atual" required></div>
+                            <div class="mb-2"><input type="password" class="form-control" id="newPassword" placeholder="Nova senha" required></div>
+                            <button type="submit" class="btn btn-outline-secondary">🔄 Atualizar Senha</button>
+                        </form>
+                    </div>
+                </div>`;
+            show(html);
+        }
+
+        function updateProfile(e) {
+            e.preventDefault();
+            const body = {
+                name: document.getElementById("name").value,
+                email: document.getElementById("email").value
+            };
+
+            fetch(`${endpoints.users}/me`, {
+                method: "PUT",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(body)
+            })
+                .then(async r => {
+                    if (r.ok) {
+                        alert("✅ Dados atualizados!");
+                        getProfile();
+                    } else {
+                        const msg = await r.text();
+                        alert("❌ Erro: " + msg);
+                    }
+                });
+        }
+
+        function changePassword(e) {
+            e.preventDefault();
+            const body = {
+                currentPassword: document.getElementById("currentPassword").value,
+                newPassword: document.getElementById("newPassword").value
+            };
+
+            fetch(`${endpoints.users}/me/password`, {
+                method: "PUT",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(body)
+            })
+                .then(async r => {
+                    if (r.ok) {
+                        alert("🔐 Senha alterada com sucesso!");
+                        e.target.reset();
+                    } else {
+                        const msg = await r.text();
+                        alert("❌ Erro: " + msg);
+                    }
+                });
+        }
+
+        function listGames() {
+            fetch(`${endpoints.games}/games`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            })
+                .then(r => r.json())
+                .then(games => {
+                    games.sort((a, b) => a.title.localeCompare(b.title));
+                    window.allGames = games;
+
+                    fetch(`${endpoints.users}/me/games`, {
+                        headers: { "Authorization": `Bearer ${token}` }
+                    })
+                        .then(r => r.json())
+                        .then(myGames => {
+                            window.ownedIds = myGames.map(g => g.id);
+                            renderStore(games);
+                            document.getElementById("storeFilter").style.display = "block";
+                        });
+                });
+        }
+
+        function buyGame(gameId) {
+            fetch(`${endpoints.payments}/buy?gameId=${gameId}`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            })
+                .then(async r => {
+                    const msg = await r.text();
+                    if (r.ok) {
+                        alert("🎉 Jogo adquirido com sucesso!");
+                        myGames();
+                    } else {
+                        alert("❌ " + msg);
+                    }
+                });
+        }
+
+        function removeGame(gameId) {
+            if (!confirm("Remover este jogo da sua biblioteca?")) return;
+            fetch(`${endpoints.users}/me/games/${gameId}`, {
+                method: "DELETE",
+                headers: { "Authorization": `Bearer ${token}` }
+            })
+                .then(r => r.text())
+                .then(msg => {
+                    alert("✅ " + msg);
+                    myGames();
+                });
+        }
+
+        function myGames() {
+            fetch(`${endpoints.users}/me/games`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            })
+                .then(r => r.json())
+                .then(games => {
+                    window.myGamesList = games;
+                    renderLibrary(games);
+                    document.getElementById("libraryFilter").style.display = "block";
+                });
+        }
+
+        function goToAdmin() {
+            window.location.href = "admin.html";
+        }
+
+        function logout() {
+            localStorage.removeItem("fcg_token");
+            window.location.href = "login.html";
+        }
+
+        function show(content) {
+            document.getElementById("output").innerHTML = content;
+        }
+
+        function filterStore() {
+            const term = document.getElementById("searchInput").value.toLowerCase();
+            const filtered = window.allGames.filter(g => g.title.toLowerCase().includes(term));
+            renderStore(filtered);
+        }
+
+        function renderStore(games) {
+            const html = games.map(g => {
+                const alreadyOwned = window.ownedIds.includes(g.id);
+                return `
+                    <div class="card mb-3 shadow-sm border-${alreadyOwned ? 'secondary' : 'primary'}">
+                        <div class="card-body">
+                            <h5 class="card-title">${g.title}</h5>
+                            <p class="card-text">${g.description}</p>
+                            <p><strong>R$${g.price}</strong></p>
+                            <button class="btn btn-${alreadyOwned ? 'secondary' : 'primary'} btn-sm"
+                                    ${alreadyOwned ? 'disabled' : `onclick="buyGame('${g.id}')"`}>
+                                ${alreadyOwned ? '🎮 Já adquirido' : '🎁 Adquirir'}
+                            </button>
+                        </div>
+                    </div>`;
+            }).join("");
+            show(`<h4>🛒 Jogos Disponíveis</h4>${html}`);
+        }
+
+        function renderLibrary(games) {
+            const html = games.length > 0
+                ? games.map(g => `
+                    <div class="card mb-3">
+                        <div class="card-body d-flex justify-content-between align-items-center">
+                            <div>
+                                <h5>${g.title}</h5>
+                                <p>${g.description}</p>
+                                <strong>R$${g.price}</strong>
+                            </div>
+                            <button class="btn btn-outline-danger btn-sm" onclick="removeGame('${g.id}')">❌ Remover</button>
+                        </div>
+                    </div>
+                `).join("")
+                : "<div class='alert alert-info'>Nenhum jogo adquirido ainda.</div>";
+            show(`<h4>📚 Minha Biblioteca</h4>${html}`);
+        }
+
+        function filterLibrary() {
+            const term = document.getElementById("librarySearch").value.toLowerCase();
+            const filtered = window.myGamesList.filter(g => g.title.toLowerCase().includes(term));
+            renderLibrary(filtered);
+        }
+    </script>
+</body>
+</html>

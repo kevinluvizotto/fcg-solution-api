@@ -1,5 +1,3 @@
-﻿// 🌐 Configurações de API FCG
-
-const apiUsers = "https://fcg-users-api-klztt.azurewebsites.net";
-const apiGames = "https://fcg-games-api-klztt.azurewebsites.net";
-const apiPayments = "https://fcg-payments-api-klztt.azurewebsites.net";
+﻿const apiUsers = "https://fcg-apim-fiap-klztt.azure-api.net/users";
+const apiGames = "https://fcg-apim-fiap-klztt.azure-api.net/games";
+const apiPayments = "https://fcg-apim-fiap-klztt.azure-api.net/payments";

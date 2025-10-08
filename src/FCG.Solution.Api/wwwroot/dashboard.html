@@ -37,7 +37,7 @@
         const apimBaseUrl = "https://fcg-apim-fiap-klztt.azure-api.net";
         const endpoints = {
             users: `${apimBaseUrl}/users`,
-            games: `${apimBaseUrl}/games`,
+            games: `${apimBaseUrl}/games/games`,
             payments: `${apimBaseUrl}/payments`
         };
 
@@ -175,7 +175,7 @@
         // ✅ LISTA DE JOGOS (corrigida — sem duplicar /games)
         async function listGames() {
             try {
-                const r1 = await fetch(`${endpoints.games}`, { // ✅ corrigido aqui
+                const r1 = await fetch(`${endpoints.games}`, { 
                     headers: {
                         "Authorization": `Bearer ${token}`,
                         "Content-Type": "application/json"

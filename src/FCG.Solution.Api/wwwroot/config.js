@@ -5,7 +5,7 @@ const apiGatewayBase = "https://fcg-apim-fiap-klztt.azure-api.net";
 const apiUsers = `${apiGatewayBase}/users`;
 const apiStore = `${apiGatewayBase}/users/store/games`;    // 🏪 Loja
 const apiLibrary = `${apiGatewayBase}/users/users/me/games`; // 📚 Biblioteca
-const apiPayments = `${apiGatewayBase}/payments`;             // 💳 Pagamentos
+const apiPayments = `${apiGatewayBase}/payments/payments`;    // 💳 Pagamentos
 
 // 🔑 Token e headers
 function getAuthToken() {

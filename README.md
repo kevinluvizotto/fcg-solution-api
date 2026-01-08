@@ -4,9 +4,9 @@ Frontend oficial da plataforma **FIAP Cloud Games (FCG)** — responsável por s
 
 Este projeto atua como **gateway visual**, hospedando uma aplicação **.NET 9 Minimal Web** que serve conteúdo estático (`wwwroot`) e consome as APIs:
 
-- 👤 [`fcg-users-api`](https://fcg-apim-fiap-klztt.azure-api.net/users)
-- 🎮 [`fcg-games-api`](https://fcg-apim-fiap-klztt.azure-api.net/games)
-- 💳 [`fcg-payments-api`](https://fcg-apim-fiap-klztt.azure-api.net/payments)
+- 👤 [`fcg-users-api`](https://fcg-apim-fiap-klztt01.azure-api.net/users)
+- 🎮 [`fcg-games-api`](https://fcg-apim-fiap-klztt01.azure-api.net/games)
+- 💳 [`fcg-payments-api`](https://fcg-apim-fiap-klztt01.azure-api.net/payments)
 
 ---
 

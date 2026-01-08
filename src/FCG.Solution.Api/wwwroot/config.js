@@ -1,5 +1,5 @@
 ﻿// 🌐 Configuração centralizada via Azure API Management
-const apiGatewayBase = "https://fcg-apim-fiap-klztt.azure-api.net";
+const apiGatewayBase = "https://fcg-apim-fiap-klztt01.azure-api.net";
 
 // 🧱 Endpoints padronizados (rota APIM + prefixo interno do Users API)
 const apiMgmt = `${apiGatewayBase}/users/users`; 

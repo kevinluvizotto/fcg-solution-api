@@ -7,6 +7,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet" />
     <script src="config.js"></script>
 </head>
+
 <body class="bg-light">
     <div class="container mt-5">
         <h2 class="mb-4 text-primary"><i class="bi bi-controller"></i> FIAP Cloud Games (FCG)</h2>
@@ -18,8 +19,17 @@
             <li class="nav-item ms-auto"><button class="btn btn-danger" onclick="logout()">🚪 Sair</button></li>
         </ul>
 
+        <!-- Filtro loja (agora chama Elasticsearch via BFF) -->
         <div id="storeFilter" class="mb-3" style="display:none;">
-            <input class="form-control" id="searchInput" placeholder="🔍 Buscar jogo por título" oninput="filterStore()">
+            <div class="d-flex gap-2 align-items-center">
+                <input class="form-control" id="searchInput"
+                       placeholder="🔎 Buscar (Elastic) por título/descrição/gênero..."
+                       oninput="onStoreSearchInput()">
+                <button class="btn btn-outline-secondary" onclick="clearStoreSearch()" title="Limpar busca">✖</button>
+            </div>
+            <div class="form-text">
+                Dica: digite pelo menos <strong>2</strong> caracteres. Se vazio, volta ao catálogo completo.
+            </div>
         </div>
 
         <div id="libraryFilter" class="mb-3" style="display:none;">
@@ -30,11 +40,27 @@
             <button class="btn btn-warning" onclick="goToAdmin()"><i class="bi bi-tools"></i> Área Administrativa</button>
         </div>
 
+        <!-- Área de recomendações (aparece quando você clicar) -->
+        <div id="recommendBox" style="display:none;"></div>
+
         <div id="output"></div>
     </div>
 
     <script>
-        // ======== Bootstrap / sessão ========
+        // ========= Helpers de campo / compat JSON (camelCase vs PascalCase) =========
+        const pick = (obj, ...keys) => {
+            for (const k of keys) {
+                if (obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
+            }
+            return undefined;
+        };
+        const gameIdOf = g => pick(g, "id", "Id", "gameId", "GameId");
+        const titleOf = g => pick(g, "title", "Title") ?? "Jogo";
+        const descOf = g => pick(g, "description", "Description") ?? "";
+        const genreOf = g => pick(g, "genre", "Genre") ?? "";
+        const priceOf = g => pick(g, "price", "Price");
+
+        // ========= Bootstrap / sessão =========
         if (!window.apiConfig || !apiConfig.ensureAuthenticated()) {
             // ensureAuthenticated já redireciona
         } else {
@@ -44,6 +70,7 @@
                     return r.json();
                 })
                 .then(u => {
+                    window.currentUser = u;
                     if (u.role === "Admin") document.getElementById("admin-btn").style.display = "block";
                     loadProfile(u);
                 })
@@ -54,23 +81,24 @@
                 });
         }
 
-        // ======== Tabs ========
+        // ========= Tabs =========
         function showTab(tab) {
             document.getElementById("storeFilter").style.display = "none";
             document.getElementById("libraryFilter").style.display = "none";
+            hideRecommendations();
 
             if (tab === "profile") getProfile();
             if (tab === "store") {
-                listStoreGames();
                 document.getElementById("storeFilter").style.display = "block";
+                openStore();
             }
             if (tab === "library") {
-                listMyGames();
                 document.getElementById("libraryFilter").style.display = "block";
+                listMyGames();
             }
         }
 
-        // ======== Perfil ========
+        // ========= Perfil =========
         function getProfile() {
             fetch(`${apiConfig.users}/me`, { headers: apiConfig.getAuthHeaders() })
                 .then(r => r.json())
@@ -142,41 +170,99 @@
             });
         }
 
-        // ======== Helpers de biblioteca/cache ========
+        // ========= Biblioteca/cache =========
         async function refreshLibraryCache() {
             const r = await fetch(apiConfig.library, { headers: apiConfig.getAuthHeaders() });
             if (!r.ok) return [];
 
             const raw = await r.json();
-            const ids = raw.map(g => g.gameId ?? g.id).filter(Boolean);
+            const ids = raw.map(g => gameIdOf(g)).filter(Boolean);
 
             window.cachedLibraryIds = ids.slice();
             return ids;
         }
 
-        // ======== Loja ========
-        async function listStoreGames() {
+        // ========= Loja: catálogo + analytics =========
+        let storeSearchTimer = null;
+        window.allGames = window.allGames || [];
+        window.ownedIds = window.ownedIds || [];
+        window.storeMode = "catalog"; // "catalog" | "search"
+
+        async function openStore() {
             try {
-                // garante que "já adquirido" apareça corretamente
+                // 1) cache de adquiridos
                 await refreshLibraryCache();
 
+                // 2) carrega catálogo (APIM via BFF)
                 const r = await fetch(apiConfig.store, { headers: apiConfig.getAuthHeaders() });
                 if (!r.ok) throw new Error("Falha ao carregar lista de jogos da loja.");
-
                 const storeGames = await r.json();
-                storeGames.sort((a, b) => a.title.localeCompare(b.title));
+                storeGames.sort((a, b) => (titleOf(a)).localeCompare(titleOf(b)));
 
                 window.allGames = storeGames;
                 window.ownedIds = Array.isArray(window.cachedLibraryIds) ? window.cachedLibraryIds : [];
 
-                renderStore(storeGames);
+                // 3) carrega analytics (Elastic)
+                await loadAnalyticsSafe();
+
+                // 4) render inicial (catálogo)
+                window.storeMode = "catalog";
+                renderStore(storeGames, { source: "Catálogo" });
             } catch (e) {
                 console.error(e);
                 alert("❌ Erro ao carregar loja: " + e.message);
             }
         }
 
-        // ======== Biblioteca ========
+        async function loadAnalyticsSafe() {
+            try {
+                const [topRes, pricesRes] = await Promise.all([
+                    fetch(apiConfig.analyticsTop, { headers: apiConfig.getAuthHeaders() }),
+                    fetch(apiConfig.analyticsPrices, { headers: apiConfig.getAuthHeaders() })
+                ]);
+
+                if (topRes.ok) window.analyticsTop = await topRes.json();
+                if (pricesRes.ok) window.analyticsPrices = await pricesRes.json();
+            } catch (e) {
+                console.warn("Analytics indisponível:", e);
+            }
+        }
+
+        function onStoreSearchInput() {
+            const term = (document.getElementById("searchInput").value || "").trim();
+
+            if (storeSearchTimer) clearTimeout(storeSearchTimer);
+
+            storeSearchTimer = setTimeout(async () => {
+                if (term.length < 2) {
+                    window.storeMode = "catalog";
+                    renderStore(window.allGames || [], { source: "Catálogo" });
+                    return;
+                }
+
+                try {
+                    window.storeMode = "search";
+                    const url = `${apiConfig.search}?q=${encodeURIComponent(term)}`;
+                    const r = await fetch(url, { headers: apiConfig.getAuthHeaders() });
+                    const txt = await r.text();
+                    if (!r.ok) throw new Error(txt || "Falha no search.");
+
+                    const results = JSON.parse(txt);
+                    renderStore(results, { source: `Elastic (q="${term}")` });
+                } catch (e) {
+                    console.error(e);
+                    alert("❌ Erro no search: " + e.message);
+                }
+            }, 300); // debounce
+        }
+
+        function clearStoreSearch() {
+            document.getElementById("searchInput").value = "";
+            window.storeMode = "catalog";
+            renderStore(window.allGames || [], { source: "Catálogo" });
+        }
+
+        // ========= Biblioteca =========
         async function listMyGames() {
             try {
                 const r = await fetch(apiConfig.library, { headers: apiConfig.getAuthHeaders() });
@@ -184,18 +270,18 @@
 
                 const raw = await r.json();
 
-                const ids = raw.map(g => g.gameId ?? g.id).filter(Boolean);
+                const ids = raw.map(g => gameIdOf(g)).filter(Boolean);
                 window.cachedLibraryIds = ids.slice();
 
-                const hasDetails = raw.length > 0 && (raw[0].title || raw[0].Title);
+                const hasDetails = raw.length > 0 && (pick(raw[0], "title", "Title") || pick(raw[0], "price", "Price"));
                 let detailed = raw;
 
                 if (!hasDetails) {
-                    const storeList = window.allGames
+                    const storeList = window.allGames && window.allGames.length
                         ? window.allGames
                         : await fetch(apiConfig.store, { headers: apiConfig.getAuthHeaders() }).then(x => x.json());
 
-                    detailed = storeList.filter(g => ids.includes(g.id));
+                    detailed = storeList.filter(g => ids.includes(gameIdOf(g)));
                 }
 
                 window.myGamesList = detailed;
@@ -206,41 +292,133 @@
             }
         }
 
-        // ======== Renderizações ========
-        function renderStore(games) {
-            const html = games.map(g => {
-                const owned = window.ownedIds?.includes(g.id);
-                return `
-              <div class="card mb-3 shadow-sm border-${owned ? 'secondary' : 'primary'}">
-                <div class="card-body">
-                  <h5 class="card-title">${g.title}</h5>
-                  <p class="card-text">${g.description ?? ""}</p>
-                  <p><strong>R$${g.price}</strong></p>
-                  <button class="btn btn-${owned ? 'secondary' : 'primary'} btn-sm"
-                    ${owned ? 'disabled' : `onclick="buyGame('${g.id}')"`}>
-                    ${owned ? '🎮 Já adquirido' : '🎁 Adquirir'}
-                  </button>
+        // ========= Renderizações =========
+        function renderAnalytics() {
+            const top = window.analyticsTop;
+            const prices = window.analyticsPrices;
+
+            const topHtml = top?.topGenres?.length
+                ? top.topGenres.map(x => `<li class="list-group-item d-flex justify-content-between align-items-center">
+                  <span>${x.genre}</span>
+                  <span class="badge bg-primary rounded-pill">${x.count}</span>
+                </li>`).join("")
+                : `<li class="list-group-item text-muted">Sem dados</li>`;
+
+            const avg = (top && top.averagePrice !== undefined)
+                ? Number(top.averagePrice).toFixed(2)
+                : "-";
+
+            const priceHtml = Array.isArray(prices) && prices.length
+                ? prices.map(p => `<li class="list-group-item d-flex justify-content-between align-items-center">
+                  <span>${p.faixa ?? p.Faixa ?? "-"}</span>
+                  <span class="badge bg-secondary rounded-pill">${p.quantidade ?? p.Quantidade ?? 0}</span>
+                </li>`).join("")
+                : `<li class="list-group-item text-muted">Sem dados</li>`;
+
+            const showReindex = window.currentUser?.role === "Admin";
+
+            return `
+            <div class="row g-3 mb-3">
+              <div class="col-lg-6">
+                <div class="card shadow-sm">
+                  <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                      <h6 class="mb-2">📊 Top gêneros</h6>
+                      <span class="badge bg-dark">Elastic</span>
+                    </div>
+                    <ul class="list-group list-group-flush mb-2">${topHtml}</ul>
+                    <div class="text-muted">💰 Preço médio: <strong>R$${avg}</strong></div>
+                  </div>
                 </div>
-              </div>`;
-            }).join("");
-            show(`<h4>🛒 Loja de Jogos</h4>${html}`);
+              </div>
+
+              <div class="col-lg-6">
+                <div class="card shadow-sm">
+                  <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                      <h6 class="mb-2">💸 Faixas de preço</h6>
+                      <span class="badge bg-dark">Elastic</span>
+                    </div>
+                    <ul class="list-group list-group-flush mb-2">${priceHtml}</ul>
+                    ${showReindex ? `
+                      <button class="btn btn-outline-primary btn-sm" onclick="runReindex()">
+                        🔄 Reindexar (Admin)
+                      </button>
+                    ` : ``}
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+
+        function renderStore(games, opts = {}) {
+            const source = opts.source ? `<span class="badge bg-info text-dark ms-2">${opts.source}</span>` : "";
+
+            const analytics = renderAnalytics();
+
+            const listHtml = (games && games.length)
+                ? games.map(g => {
+                    const id = gameIdOf(g);
+                    const owned = window.ownedIds?.includes(id);
+
+                    return `
+                  <div class="card mb-3 shadow-sm border-${owned ? 'secondary' : 'primary'}">
+                    <div class="card-body">
+                      <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                          <h5 class="card-title mb-1">${titleOf(g)}</h5>
+                          <div class="text-muted small">${genreOf(g)}</div>
+                        </div>
+                        <div class="text-end">
+                          <div class="fw-bold">${priceOf(g) !== undefined ? `R$${Number(priceOf(g)).toFixed(2)}` : ""}</div>
+                        </div>
+                      </div>
+
+                      <p class="card-text mt-2">${descOf(g)}</p>
+
+                      <div class="d-flex gap-2">
+                        <button class="btn btn-${owned ? 'secondary' : 'primary'} btn-sm"
+                          ${owned ? 'disabled' : `onclick="buyGame('${id}')"`}>
+                          ${owned ? '🎮 Já adquirido' : '🎁 Adquirir'}
+                        </button>
+
+                        <button class="btn btn-outline-dark btn-sm" onclick="showRecommendations('${id}', '${escapeHtml(titleOf(g))}')">
+                          ✨ Recomendar
+                        </button>
+                      </div>
+                    </div>
+                  </div>`;
+                }).join("")
+                : `<div class="alert alert-info">Nenhum jogo encontrado.</div>`;
+
+            show(`
+            <div class="d-flex align-items-center mb-2">
+              <h4 class="mb-0">🛒 Loja de Jogos</h4>
+              ${source}
+            </div>
+            ${analytics}
+            ${listHtml}
+          `);
         }
 
         function renderLibrary(games) {
-            const html = games.length > 0
+            const html = (games && games.length > 0)
                 ? games.map(g => {
-                    const id = g.id ?? g.gameId;
+                    const id = gameIdOf(g);
                     return `
                   <div class="card mb-3 shadow-sm">
                     <div class="card-body d-flex justify-content-between align-items-center">
                       <div>
-                        <h5>${g.title ?? g.Title ?? "Jogo"}</h5>
-                        <p>${g.description ?? ""}</p>
-                        <strong>${g.price ? `R$${g.price}` : ""}</strong>
+                        <h5 class="mb-1">${titleOf(g)}</h5>
+                        <div class="text-muted small">${genreOf(g)}</div>
+                        <p class="mb-1">${descOf(g)}</p>
+                        <strong>${priceOf(g) !== undefined ? `R$${Number(priceOf(g)).toFixed(2)}` : ""}</strong>
                       </div>
-                      <button class="btn btn-outline-danger btn-sm" onclick="removeGame('${id}')">
-                        🗑 Remover
-                      </button>
+                      <div class="d-flex flex-column gap-2">
+                        <button class="btn btn-outline-danger btn-sm" onclick="removeGame('${id}')">🗑 Remover</button>
+                        <button class="btn btn-outline-dark btn-sm" onclick="showRecommendations('${id}', '${escapeHtml(titleOf(g))}')">✨ Recomendar</button>
+                      </div>
                     </div>
                   </div>`;
                 }).join("")
@@ -260,16 +438,15 @@
             if (res.ok) {
                 alert("🗑️ Jogo removido da biblioteca!");
                 await listMyGames();
-                await listStoreGames();
+                await openStore(); // recarrega catálogo + cache
             } else {
                 alert("❌ Erro ao remover o jogo: " + await res.text());
             }
         }
 
-        // ======== Compra ========
+        // ========= Compra =========
         async function buyGame(gameId) {
             try {
-                // 1) Compra via Payments (que deveria registrar e também chamar Users)
                 const payRes = await fetch(`${apiConfig.payments}/payments/buy?gameId=${gameId}`, {
                     method: "POST",
                     headers: apiConfig.getAuthHeaders()
@@ -277,11 +454,9 @@
 
                 const payText = await payRes.text();
 
-                // 202 = pagamento ok, mas biblioteca falhou (seu Payments já retorna isso)
                 if (payRes.status === 202) {
                     console.warn("Pagamento OK, mas biblioteca falhou. Tentando fallback no Users.", payText);
 
-                    // 2) Fallback: adiciona direto na biblioteca
                     const libRes = await fetch(`${apiConfig.library}?gameId=${gameId}`, {
                         method: "POST",
                         headers: apiConfig.getAuthHeaders()
@@ -295,7 +470,7 @@
 
                     alert("🎉 Pagamento OK e jogo adicionado à biblioteca com sucesso!");
                     await listMyGames();
-                    await listStoreGames();
+                    await openStore();
                     return;
                 }
 
@@ -306,28 +481,127 @@
 
                 alert("🎉 Jogo adquirido com sucesso!");
                 await listMyGames();
-                await listStoreGames();
+                await openStore();
             } catch (e) {
                 console.error(e);
                 alert("❌ Erro inesperado ao comprar: " + e.message);
             }
         }
 
-        // ======== Utilitários ========
+        // ========= Recomendações =========
+        function escapeHtml(s) {
+            return String(s || "")
+                .replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;").replaceAll('"', "&quot;")
+                .replaceAll("'", "&#039;");
+        }
+
+        async function showRecommendations(gameId, gameTitle) {
+            try {
+                const box = document.getElementById("recommendBox");
+                box.style.display = "block";
+                box.innerHTML = `
+              <div class="card shadow-sm mb-3">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">✨ Recomendações para: <span class="text-primary">${gameTitle}</span></h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="hideRecommendations()">✖</button>
+                  </div>
+                  <div class="text-muted small mb-2">Fonte: Elasticsearch</div>
+                  <div id="recommendBody" class="mt-2">Carregando...</div>
+                </div>
+              </div>
+            `;
+
+                const url = `${apiConfig.recommendSimilar}/${encodeURIComponent(gameId)}`;
+                const r = await fetch(url, { headers: apiConfig.getAuthHeaders() });
+                const txt = await r.text();
+                if (!r.ok) throw new Error(txt || "Falha ao buscar recomendações.");
+
+                const list = JSON.parse(txt);
+                const html = (list && list.length)
+                    ? list.map(g => {
+                        const id = gameIdOf(g);
+                        const owned = window.ownedIds?.includes(id);
+                        return `
+                    <div class="card mb-2">
+                      <div class="card-body">
+                        <div class="d-flex justify-content-between">
+                          <div>
+                            <strong>${titleOf(g)}</strong>
+                            <div class="text-muted small">${genreOf(g)}</div>
+                          </div>
+                          <div class="text-end">
+                            <div class="fw-bold">${priceOf(g) !== undefined ? `R$${Number(priceOf(g)).toFixed(2)}` : ""}</div>
+                          </div>
+                        </div>
+                        <div class="mt-2">${descOf(g)}</div>
+                        <div class="mt-2">
+                          <button class="btn btn-${owned ? 'secondary' : 'primary'} btn-sm"
+                            ${owned ? 'disabled' : `onclick="buyGame('${id}')"`}>
+                            ${owned ? '🎮 Já adquirido' : '🎁 Adquirir'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                    }).join("")
+                    : `<div class="alert alert-info mb-0">Sem recomendações (poucos similares no índice).</div>`;
+
+                document.getElementById("recommendBody").innerHTML = html;
+                window.scrollTo({ top: 0, behavior: "smooth" });
+            } catch (e) {
+                console.error(e);
+                alert("❌ Erro nas recomendações: " + e.message);
+            }
+        }
+
+        function hideRecommendations() {
+            const box = document.getElementById("recommendBox");
+            box.style.display = "none";
+            box.innerHTML = "";
+        }
+
+        // ========= Reindex (Admin) =========
+        async function runReindex() {
+            if (window.currentUser?.role !== "Admin") {
+                alert("❌ Somente Admin pode reindexar.");
+                return;
+            }
+            if (!confirm("Reindexar agora? Isso pode levar alguns segundos.")) return;
+
+            try {
+                const r = await fetch(apiConfig.reindex, {
+                    method: "POST",
+                    headers: apiConfig.getAuthHeaders()
+                });
+
+                const txt = await r.text();
+                if (!r.ok) throw new Error(txt || "Falha no reindex.");
+
+                alert("✅ Reindex executado!\n" + txt);
+
+                // após reindex, recarrega analytics e loja
+                await loadAnalyticsSafe();
+                if (window.storeMode === "search") {
+                    onStoreSearchInput();
+                } else {
+                    renderStore(window.allGames || [], { source: "Catálogo" });
+                }
+            } catch (e) {
+                alert("❌ Erro no reindex: " + e.message);
+            }
+        }
+
+        // ========= Utilitários =========
         function goToAdmin() { window.location.href = "admin.html"; }
         function logout() { localStorage.removeItem("fcg_token"); window.location.href = "login.html"; }
         function show(html) { document.getElementById("output").innerHTML = html; }
 
-        // ======== Filtros ========
-        function filterStore() {
-            const term = document.getElementById("searchInput").value.toLowerCase();
-            const filtered = (window.allGames || []).filter(g => (g.title || "").toLowerCase().includes(term));
-            renderStore(filtered);
-        }
-
+        // ========= Filtro Biblioteca =========
         function filterLibrary() {
-            const term = document.getElementById("librarySearch").value.toLowerCase();
-            const filtered = (window.myGamesList || []).filter(g => ((g.title || g.Title || "") + "").toLowerCase().includes(term));
+            const term = (document.getElementById("librarySearch").value || "").toLowerCase();
+            const filtered = (window.myGamesList || []).filter(g => (titleOf(g) + "").toLowerCase().includes(term));
             renderLibrary(filtered);
         }
     </script>

@@ -1,19 +1,16 @@
-﻿﻿
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8" />
     <title>FCG Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet" />
-    <!-- Importa a config centralizada (endpoints + helpers) -->
     <script src="config.js"></script>
 </head>
 <body class="bg-light">
     <div class="container mt-5">
         <h2 class="mb-4 text-primary"><i class="bi bi-controller"></i> FIAP Cloud Games (FCG)</h2>
 
-        <!-- Navegação -->
         <ul class="nav nav-tabs mb-3" id="dashboardTabs">
             <li class="nav-item"><button class="nav-link active" onclick="showTab('profile')">👤 Meu Perfil</button></li>
             <li class="nav-item"><button class="nav-link" onclick="showTab('store')">🛒 Loja</button></li>
@@ -21,7 +18,6 @@
             <li class="nav-item ms-auto"><button class="btn btn-danger" onclick="logout()">🚪 Sair</button></li>
         </ul>
 
-        <!-- Filtros -->
         <div id="storeFilter" class="mb-3" style="display:none;">
             <input class="form-control" id="searchInput" placeholder="🔍 Buscar jogo por título" oninput="filterStore()">
         </div>
@@ -30,21 +26,18 @@
             <input class="form-control" id="librarySearch" placeholder="🔍 Buscar na biblioteca" oninput="filterLibrary()">
         </div>
 
-        <!-- Botão Admin -->
         <div id="admin-btn" class="mb-3" style="display:none;">
             <button class="btn btn-warning" onclick="goToAdmin()"><i class="bi bi-tools"></i> Área Administrativa</button>
         </div>
 
-        <!-- Conteúdo dinâmico -->
         <div id="output"></div>
     </div>
 
     <script>
-        // 🚪 Verifica sessão
-        if (!apiConfig.ensureAuthenticated()) {
-            // redireciona no próprio helper
+        // ======== Bootstrap / sessão ========
+        if (!window.apiConfig || !apiConfig.ensureAuthenticated()) {
+            // ensureAuthenticated já redireciona
         } else {
-            // Carrega perfil inicial
             fetch(`${apiConfig.users}/me`, { headers: apiConfig.getAuthHeaders() })
                 .then(r => {
                     if (!r.ok) throw new Error("Falha ao autenticar.");
@@ -61,17 +54,23 @@
                 });
         }
 
-        // 🔀 Abas
+        // ======== Tabs ========
         function showTab(tab) {
             document.getElementById("storeFilter").style.display = "none";
             document.getElementById("libraryFilter").style.display = "none";
 
             if (tab === "profile") getProfile();
-            if (tab === "store") { listStoreGames(); document.getElementById("storeFilter").style.display = "block"; }
-            if (tab === "library") { listMyGames(); document.getElementById("libraryFilter").style.display = "block"; }
+            if (tab === "store") {
+                listStoreGames();
+                document.getElementById("storeFilter").style.display = "block";
+            }
+            if (tab === "library") {
+                listMyGames();
+                document.getElementById("libraryFilter").style.display = "block";
+            }
         }
 
-        // 👤 Perfil
+        // ======== Perfil ========
         function getProfile() {
             fetch(`${apiConfig.users}/me`, { headers: apiConfig.getAuthHeaders() })
                 .then(r => r.json())
@@ -80,33 +79,34 @@
 
         function loadProfile(data) {
             const html = `
-                <div class="card shadow-sm">
-                  <div class="card-body">
-                    <h5 class="card-title">👤 Meu Perfil</h5>
-                    <form onsubmit="updateProfile(event)">
-                      <div class="mb-2">
-                        <label>Nome</label>
-                        <input type="text" class="form-control" id="name" value="${data.name}" required>
-                      </div>
-                      <div class="mb-2">
-                        <label>Email</label>
-                        <input type="email" class="form-control" id="email" value="${data.email}" required>
-                      </div>
-                      <div class="mb-2">
-                        <label>Perfil</label>
-                        <input type="text" class="form-control" value="${data.role === 'User' ? 'Usuário' : data.role}" disabled>
-                      </div>
-                      <button type="submit" class="btn btn-primary">💾 Salvar Alterações</button>
-                    </form>
-                    <hr>
-                    <h6>🔑 Alterar Senha</h6>
-                    <form onsubmit="changePassword(event)">
-                      <div class="mb-2"><input type="password" class="form-control" id="currentPassword" placeholder="Senha atual" required></div>
-                      <div class="mb-2"><input type="password" class="form-control" id="newPassword" placeholder="Nova senha" required></div>
-                      <button type="submit" class="btn btn-outline-secondary">🔄 Atualizar Senha</button>
-                    </form>
+            <div class="card shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">👤 Meu Perfil</h5>
+                <form onsubmit="updateProfile(event)">
+                  <div class="mb-2">
+                    <label>Nome</label>
+                    <input type="text" class="form-control" id="name" value="${data.name}" required>
                   </div>
-                </div>`;
+                  <div class="mb-2">
+                    <label>Email</label>
+                    <input type="email" class="form-control" id="email" value="${data.email}" required>
+                  </div>
+                  <div class="mb-2">
+                    <label>Perfil</label>
+                    <input type="text" class="form-control" value="${data.role === 'User' ? 'Usuário' : data.role}" disabled>
+                  </div>
+                  <button type="submit" class="btn btn-primary">💾 Salvar Alterações</button>
+                </form>
+
+                <hr>
+                <h6>🔑 Alterar Senha</h6>
+                <form onsubmit="changePassword(event)">
+                  <div class="mb-2"><input type="password" class="form-control" id="currentPassword" placeholder="Senha atual" required></div>
+                  <div class="mb-2"><input type="password" class="form-control" id="newPassword" placeholder="Nova senha" required></div>
+                  <button type="submit" class="btn btn-outline-secondary">🔄 Atualizar Senha</button>
+                </form>
+              </div>
+            </div>`;
             show(html);
         }
 
@@ -142,18 +142,33 @@
             });
         }
 
-        // 🏪 LOJA — chama APENAS /users/store/games
+        // ======== Helpers de biblioteca/cache ========
+        async function refreshLibraryCache() {
+            const r = await fetch(apiConfig.library, { headers: apiConfig.getAuthHeaders() });
+            if (!r.ok) return [];
+
+            const raw = await r.json();
+            const ids = raw.map(g => g.gameId ?? g.id).filter(Boolean);
+
+            window.cachedLibraryIds = ids.slice();
+            return ids;
+        }
+
+        // ======== Loja ========
         async function listStoreGames() {
             try {
+                // garante que "já adquirido" apareça corretamente
+                await refreshLibraryCache();
+
                 const r = await fetch(apiConfig.store, { headers: apiConfig.getAuthHeaders() });
                 if (!r.ok) throw new Error("Falha ao carregar lista de jogos da loja.");
 
                 const storeGames = await r.json();
                 storeGames.sort((a, b) => a.title.localeCompare(b.title));
-                window.allGames = storeGames;
 
-                // NÃO chamamos /me/games aqui. Só usamos cache se existir.
+                window.allGames = storeGames;
                 window.ownedIds = Array.isArray(window.cachedLibraryIds) ? window.cachedLibraryIds : [];
+
                 renderStore(storeGames);
             } catch (e) {
                 console.error(e);
@@ -161,26 +176,25 @@
             }
         }
 
-        // 📚 BIBLIOTECA — chama APENAS /users/me/games
+        // ======== Biblioteca ========
         async function listMyGames() {
             try {
                 const r = await fetch(apiConfig.library, { headers: apiConfig.getAuthHeaders() });
                 if (!r.ok) throw new Error("Falha ao carregar biblioteca.");
 
                 const raw = await r.json();
-                // Suporta ambos os formatos: [{gameId}] ou [{id, title,...}]
-                const ids = raw.map(g => g.gameId ?? g.id);
-                window.cachedLibraryIds = ids.slice(); // cache para a Loja
 
-                // Se a API já retorna objetos completos (title, price), usamos direto
+                const ids = raw.map(g => g.gameId ?? g.id).filter(Boolean);
+                window.cachedLibraryIds = ids.slice();
+
                 const hasDetails = raw.length > 0 && (raw[0].title || raw[0].Title);
                 let detailed = raw;
 
-                // Caso contrário, enriquecemos via catálogo da loja (se não tiver, buscamos agora)
                 if (!hasDetails) {
                     const storeList = window.allGames
                         ? window.allGames
                         : await fetch(apiConfig.store, { headers: apiConfig.getAuthHeaders() }).then(x => x.json());
+
                     detailed = storeList.filter(g => ids.includes(g.id));
                 }
 
@@ -192,84 +206,119 @@
             }
         }
 
-        // 🖼️ Renderizações
+        // ======== Renderizações ========
         function renderStore(games) {
             const html = games.map(g => {
                 const owned = window.ownedIds?.includes(g.id);
                 return `
-                  <div class="card mb-3 shadow-sm border-${owned ? 'secondary' : 'primary'}">
-                    <div class="card-body">
-                      <h5 class="card-title">${g.title}</h5>
-                      <p class="card-text">${g.description ?? ""}</p>
-                      <p><strong>R$${g.price}</strong></p>
-                      <button class="btn btn-${owned ? 'secondary' : 'primary'} btn-sm"
-                        ${owned ? 'disabled' : `onclick="buyGame('${g.id}')"`}>
-                        ${owned ? '🎮 Já adquirido' : '🎁 Adquirir'}
-                      </button>
-                    </div>
-                  </div>`;
+              <div class="card mb-3 shadow-sm border-${owned ? 'secondary' : 'primary'}">
+                <div class="card-body">
+                  <h5 class="card-title">${g.title}</h5>
+                  <p class="card-text">${g.description ?? ""}</p>
+                  <p><strong>R$${g.price}</strong></p>
+                  <button class="btn btn-${owned ? 'secondary' : 'primary'} btn-sm"
+                    ${owned ? 'disabled' : `onclick="buyGame('${g.id}')"`}>
+                    ${owned ? '🎮 Já adquirido' : '🎁 Adquirir'}
+                  </button>
+                </div>
+              </div>`;
             }).join("");
             show(`<h4>🛒 Loja de Jogos</h4>${html}`);
         }
 
         function renderLibrary(games) {
             const html = games.length > 0
-                ? games.map(g => `
-            <div class="card mb-3 shadow-sm">
-                <div class="card-body d-flex justify-content-between align-items-center">
-                    <div>
+                ? games.map(g => {
+                    const id = g.id ?? g.gameId;
+                    return `
+                  <div class="card mb-3 shadow-sm">
+                    <div class="card-body d-flex justify-content-between align-items-center">
+                      <div>
                         <h5>${g.title ?? g.Title ?? "Jogo"}</h5>
                         <p>${g.description ?? ""}</p>
                         <strong>${g.price ? `R$${g.price}` : ""}</strong>
-                    </div>
-                    <button class="btn btn-outline-danger btn-sm" onclick="removeGame('${g.id}')">
+                      </div>
+                      <button class="btn btn-outline-danger btn-sm" onclick="removeGame('${id}')">
                         🗑 Remover
-                    </button>
-                </div>
-            </div>`).join("")
+                      </button>
+                    </div>
+                  </div>`;
+                }).join("")
                 : "<div class='alert alert-info'>Nenhum jogo adquirido ainda.</div>";
+
             show(`<h4>📚 Minha Biblioteca</h4>${html}`);
         }
 
         async function removeGame(gameId) {
             if (!confirm("Tem certeza que deseja remover este jogo da sua biblioteca?")) return;
+
             const res = await fetch(`${apiConfig.library}/${gameId}`, {
                 method: "DELETE",
                 headers: apiConfig.getAuthHeaders()
             });
+
             if (res.ok) {
                 alert("🗑️ Jogo removido da biblioteca!");
                 await listMyGames();
                 await listStoreGames();
             } else {
-                alert("❌ Erro ao remover o jogo.");
+                alert("❌ Erro ao remover o jogo: " + await res.text());
             }
         }
 
-        // 💳 Comprar
-        function buyGame(gameId) {
-            fetch(`${apiConfig.payments}/payments/buy?gameId=${gameId}`, {
-                method: "POST",
-                headers: apiConfig.getAuthHeaders()
-            }).then(async r => {
-                const msg = await r.text();
-                if (r.ok) {
-                    alert("🎉 Jogo adquirido com sucesso!");
-                    // Atualiza cache (biblioteca) e re-renderiza loja com o novo status
+        // ======== Compra ========
+        async function buyGame(gameId) {
+            try {
+                // 1) Compra via Payments (que deveria registrar e também chamar Users)
+                const payRes = await fetch(`${apiConfig.payments}/payments/buy?gameId=${gameId}`, {
+                    method: "POST",
+                    headers: apiConfig.getAuthHeaders()
+                });
+
+                const payText = await payRes.text();
+
+                // 202 = pagamento ok, mas biblioteca falhou (seu Payments já retorna isso)
+                if (payRes.status === 202) {
+                    console.warn("Pagamento OK, mas biblioteca falhou. Tentando fallback no Users.", payText);
+
+                    // 2) Fallback: adiciona direto na biblioteca
+                    const libRes = await fetch(`${apiConfig.library}?gameId=${gameId}`, {
+                        method: "POST",
+                        headers: apiConfig.getAuthHeaders()
+                    });
+
+                    const libText = await libRes.text();
+                    if (!libRes.ok && !libText.toLowerCase().includes("já adquirido")) {
+                        alert("⚠️ Pagamento OK, mas falhou ao adicionar na biblioteca: " + libText);
+                        return;
+                    }
+
+                    alert("🎉 Pagamento OK e jogo adicionado à biblioteca (fallback)!");
                     await listMyGames();
                     await listStoreGames();
-                } else {
-                    alert("❌ " + msg);
+                    return;
                 }
-            });
+
+                if (!payRes.ok) {
+                    alert("❌ Falha na compra: " + payText);
+                    return;
+                }
+
+                alert("🎉 Jogo adquirido com sucesso!");
+                await listMyGames();
+                await listStoreGames();
+            } catch (e) {
+                console.error(e);
+                alert("❌ Erro inesperado ao comprar: " + e.message);
+            }
         }
 
-        // Utilitários
+        // ======== Utilitários ========
         function goToAdmin() { window.location.href = "admin.html"; }
         function logout() { localStorage.removeItem("fcg_token"); window.location.href = "login.html"; }
         function show(html) { document.getElementById("output").innerHTML = html; }
 
-        // Filtros
+        // ======== Filtros ========
         function filterStore() {
             const term = document.getElementById("searchInput").value.toLowerCase();
             const filtered = (window.allGames || []).filter(g => (g.title || "").toLowerCase().includes(term));
@@ -278,7 +327,7 @@
 
         function filterLibrary() {
             const term = document.getElementById("librarySearch").value.toLowerCase();
-            const filtered = (window.myGamesList || []).filter(g => (g.title || "").toLowerCase().includes(term));
+            const filtered = (window.myGamesList || []).filter(g => ((g.title || g.Title || "") + "").toLowerCase().includes(term));
             renderLibrary(filtered);
         }
     </script>

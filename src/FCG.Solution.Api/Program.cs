@@ -3,26 +3,13 @@ using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ======================
-// Upstreams
-// ======================
 var apimBaseUrl = builder.Configuration["Upstreams:ApimBaseUrl"];
 if (string.IsNullOrWhiteSpace(apimBaseUrl))
     throw new InvalidOperationException("Missing config: Upstreams:ApimBaseUrl (ex: https://fcg-apim-fiap-klztt01.azure-api.net)");
 
-var searchBaseUrl = builder.Configuration["Upstreams:SearchBaseUrl"]; // ✅ novo
-if (string.IsNullOrWhiteSpace(searchBaseUrl))
-    throw new InvalidOperationException("Missing config: Upstreams:SearchBaseUrl (ex: https://fcg-search-api-klztt01.azurewebsites.net)");
-
 builder.Services.AddHttpClient("apim", client =>
 {
     client.BaseAddress = new Uri(apimBaseUrl.TrimEnd('/'));
-    client.Timeout = TimeSpan.FromSeconds(100);
-});
-
-builder.Services.AddHttpClient("search", client => // ✅ novo
-{
-    client.BaseAddress = new Uri(searchBaseUrl.TrimEnd('/'));
     client.Timeout = TimeSpan.FromSeconds(100);
 });
 
@@ -45,63 +32,46 @@ app.MapGet("/", ctx =>
 // ⚠️ Inclui OPTIONS por segurança (mesmo com same-origin, não atrapalha)
 string[] methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 
-// ======================
-// APIM routes
-// ======================
-MapProxyTo("apim", "/users");
-MapProxyTo("apim", "/games");
-MapProxyTo("apim", "/payments");
-
-// ======================
-// Search routes (direto no Search API, NÃO APIM)
-// ======================
-MapProxyTo("search", "/search");
-MapProxyTo("search", "/analytics");
-MapProxyTo("search", "/recommendations");
-MapProxyTo("search", "/reindex");
+MapProxy("/users");
+MapProxy("/games");
+MapProxy("/payments");
+MapProxy("/search");
 
 app.Run("http://*:80");
 
-// ----------------------
-
-void MapProxyTo(string upstreamClientName, string prefix)
+void MapProxy(string prefix)
 {
-    app.MapMethods(prefix, methods, (HttpContext ctx, IHttpClientFactory factory, IConfiguration cfg, ILogger<Program> logger)
-        => ProxyToUpstream(ctx, factory, cfg, logger, upstreamClientName));
-
-    app.MapMethods($"{prefix}/{{**rest}}", methods, (HttpContext ctx, IHttpClientFactory factory, IConfiguration cfg, ILogger<Program> logger)
-        => ProxyToUpstream(ctx, factory, cfg, logger, upstreamClientName));
+    app.MapMethods(prefix, methods, ProxyToApim);
+    app.MapMethods($"{prefix}/{{**rest}}", methods, ProxyToApim);
 }
 
-static async Task ProxyToUpstream(
+static async Task ProxyToApim(
     HttpContext ctx,
     IHttpClientFactory factory,
     IConfiguration cfg,
-    ILogger<Program> logger,
-    string upstreamClientName)
+    ILogger<Program> logger)
 {
     try
     {
-        var client = factory.CreateClient(upstreamClientName);
-
-        // Path + Query
+        var client = factory.CreateClient("apim");
         var target = ctx.Request.Path + ctx.Request.QueryString;
 
         using var req = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), target);
 
-        // Encaminha só os headers essenciais
+        // Encaminha só os headers essenciais (evita header “estranho” quebrar o upstream)
         if (ctx.Request.Headers.TryGetValue("Authorization", out var auth))
             req.Headers.TryAddWithoutValidation("Authorization", auth.ToArray());
 
         if (ctx.Request.Headers.TryGetValue("Accept", out var accept))
             req.Headers.TryAddWithoutValidation("Accept", accept.ToArray());
 
-        // Subscription key só faz sentido pro APIM (mas não atrapalha se existir)
+        // Se seu APIM exigir subscription key, configure no App Service:
+        // Upstreams__ApimSubscriptionKey = <key>
         var subKey = cfg["Upstreams:ApimSubscriptionKey"];
-        if (!string.IsNullOrWhiteSpace(subKey) && upstreamClientName.Equals("apim", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(subKey))
             req.Headers.TryAddWithoutValidation("Ocp-Apim-Subscription-Key", subKey);
 
-        // Body: copia para memória (evita stream não-seekable)
+        // Body: copia para memória (evita problemas com stream não-seekable / já consumido)
         var hasBody =
             !HttpMethods.IsGet(ctx.Request.Method) &&
             !HttpMethods.IsHead(ctx.Request.Method) &&
@@ -135,7 +105,6 @@ static async Task ProxyToUpstream(
         // Debug útil
         ctx.Response.Headers["X-Upstream"] = client.BaseAddress + target;
         ctx.Response.Headers["X-TraceId"] = ctx.TraceIdentifier;
-        ctx.Response.Headers["X-Upstream-Client"] = upstreamClientName;
 
         await resp.Content.CopyToAsync(ctx.Response.Body);
     }
@@ -146,6 +115,6 @@ static async Task ProxyToUpstream(
         ctx.Response.StatusCode = 502;
         ctx.Response.ContentType = "application/json";
         await ctx.Response.WriteAsync(
-            $"{{\"status\":502,\"message\":\"Proxy error calling upstream\",\"upstream\":\"{upstreamClientName}\",\"traceId\":\"{ctx.TraceIdentifier}\"}}");
+            $"{{\"status\":502,\"message\":\"Proxy error calling APIM\",\"traceId\":\"{ctx.TraceIdentifier}\"}}");
     }
 }

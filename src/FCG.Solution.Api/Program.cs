@@ -3,12 +3,9 @@ using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// === Config do APIM ===
 var apimBaseUrl = builder.Configuration["Upstreams:ApimBaseUrl"];
 if (string.IsNullOrWhiteSpace(apimBaseUrl))
-{
     throw new InvalidOperationException("Missing config: Upstreams:ApimBaseUrl (ex: https://fcg-apim-fiap-klztt01.azure-api.net)");
-}
 
 builder.Services.AddHttpClient("apim", client =>
 {
@@ -18,26 +15,22 @@ builder.Services.AddHttpClient("apim", client =>
 
 var app = builder.Build();
 
-// Se estiver no Azure, isso ajuda a respeitar https do front-end
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor
 });
 
-// Serve portal (wwwroot)
+// Portal estático
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-// Redireciona raiz -> login.html
 app.MapGet("/", context =>
 {
     context.Response.Redirect("/login.html");
     return Task.CompletedTask;
 });
 
-// ===== Reverse proxy para APIM =====
-// Portal vai chamar (same-origin): /users/login, /users/me, /users/users, /games/games, etc.
-// E o solution-api vai encaminhar para o APIM mantendo path + query.
+// Proxy (BFF)
 string[] methods = ["GET", "POST", "PUT", "DELETE", "PATCH"];
 
 MapProxy("/users");
@@ -47,7 +40,7 @@ MapProxy("/search");
 
 app.Run("http://*:80");
 
-// ----------------- helpers -----------------
+// ---------------- helpers ----------------
 
 void MapProxy(string prefix)
 {
@@ -59,33 +52,47 @@ static async Task ProxyToApim(HttpContext ctx, IHttpClientFactory factory, IConf
 {
     var client = factory.CreateClient("apim");
 
-    // Mantém path + query exatamente como o portal pediu
+    // Mantém path + query
     var target = ctx.Request.Path + ctx.Request.QueryString;
 
     using var req = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), target);
 
-    // Copia body quando existir
-    if (ctx.Request.ContentLength > 0 && !HttpMethods.IsGet(ctx.Request.Method) && !HttpMethods.IsHead(ctx.Request.Method))
+    // Se tiver body, encaminha como stream + Content-Type correto
+    var hasBody =
+        ctx.Request.ContentLength.HasValue && ctx.Request.ContentLength.Value > 0;
+
+    if (hasBody && !HttpMethods.IsGet(ctx.Request.Method) && !HttpMethods.IsHead(ctx.Request.Method))
     {
+        // garante que o Body pode ser lido/encaminhado
+        ctx.Request.EnableBuffering();
+        ctx.Request.Body.Position = 0;
+
         req.Content = new StreamContent(ctx.Request.Body);
 
-        if (!string.IsNullOrWhiteSpace(ctx.Request.ContentType))
-            req.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(ctx.Request.ContentType);
+        // Content-Type tem que ir no Content.Headers (não no req.Headers)
+        var ct = ctx.Request.ContentType;
+        if (!string.IsNullOrWhiteSpace(ct))
+            req.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(ct);
+        else
+            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
     }
 
-    // Copia headers (inclui Authorization)
+    // Copia headers (exceto hop-by-hop e headers de content)
     foreach (var h in ctx.Request.Headers)
     {
-        if (h.Key.Equals("Host", StringComparison.OrdinalIgnoreCase)) continue;
-        if (h.Key.Equals("Connection", StringComparison.OrdinalIgnoreCase)) continue;
-        if (h.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
+        var key = h.Key;
 
-        if (!req.Headers.TryAddWithoutValidation(h.Key, h.Value.ToArray()))
-            req.Content?.Headers.TryAddWithoutValidation(h.Key, h.Value.ToArray());
+        if (key.Equals("Host", StringComparison.OrdinalIgnoreCase)) continue;
+        if (key.Equals("Connection", StringComparison.OrdinalIgnoreCase)) continue;
+        if (key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
+        if (key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) continue; // IMPORTANT
+        if (key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)) continue;
+
+        if (!req.Headers.TryAddWithoutValidation(key, h.Value.ToArray()))
+            req.Content?.Headers.TryAddWithoutValidation(key, h.Value.ToArray());
     }
 
-    // (Opcional) Se seu APIM exigir subscription key, configure:
-    // Upstreams__ApimSubscriptionKey = <key>
+    // (Opcional) subscription key se necessário
     var subKey = cfg["Upstreams:ApimSubscriptionKey"];
     if (!string.IsNullOrWhiteSpace(subKey) && !req.Headers.Contains("Ocp-Apim-Subscription-Key"))
         req.Headers.TryAddWithoutValidation("Ocp-Apim-Subscription-Key", subKey);
@@ -94,14 +101,12 @@ static async Task ProxyToApim(HttpContext ctx, IHttpClientFactory factory, IConf
 
     ctx.Response.StatusCode = (int)resp.StatusCode;
 
-    // Copia headers da resposta
     foreach (var h in resp.Headers)
         ctx.Response.Headers[h.Key] = h.Value.ToArray();
 
     foreach (var h in resp.Content.Headers)
         ctx.Response.Headers[h.Key] = h.Value.ToArray();
 
-    // Evita problemas com header hop-by-hop
     ctx.Response.Headers.Remove("transfer-encoding");
 
     await resp.Content.CopyToAsync(ctx.Response.Body);

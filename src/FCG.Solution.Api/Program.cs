@@ -1,4 +1,4 @@
-using System.Net.Http.Headers;
+﻿using System.Net.Http.Headers;
 using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,18 +20,17 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
     ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor
 });
 
-// Portal est�tico
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapGet("/", context =>
+app.MapGet("/", ctx =>
 {
-    context.Response.Redirect("/login.html");
+    ctx.Response.Redirect("/login.html");
     return Task.CompletedTask;
 });
 
-// Proxy (BFF)
-string[] methods = ["GET", "POST", "PUT", "DELETE", "PATCH"];
+// ⚠️ Inclui OPTIONS por segurança (mesmo com same-origin, não atrapalha)
+string[] methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 
 MapProxy("/users");
 MapProxy("/games");
@@ -40,74 +39,82 @@ MapProxy("/search");
 
 app.Run("http://*:80");
 
-// ---------------- helpers ----------------
-
 void MapProxy(string prefix)
 {
     app.MapMethods(prefix, methods, ProxyToApim);
     app.MapMethods($"{prefix}/{{**rest}}", methods, ProxyToApim);
 }
 
-static async Task ProxyToApim(HttpContext ctx, IHttpClientFactory factory, IConfiguration cfg)
+static async Task ProxyToApim(
+    HttpContext ctx,
+    IHttpClientFactory factory,
+    IConfiguration cfg,
+    ILogger<Program> logger)
 {
-    var client = factory.CreateClient("apim");
-
-    // Mant�m path + query
-    var target = ctx.Request.Path + ctx.Request.QueryString;
-
-    using var req = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), target);
-
-    // Se tiver body, encaminha como stream + Content-Type correto
-    var hasBody =
-        ctx.Request.ContentLength.HasValue && ctx.Request.ContentLength.Value > 0;
-
-    if (hasBody && !HttpMethods.IsGet(ctx.Request.Method) && !HttpMethods.IsHead(ctx.Request.Method))
+    try
     {
-        // garante que o Body pode ser lido/encaminhado
-        ctx.Request.EnableBuffering();
-        ctx.Request.Body.Position = 0;
+        var client = factory.CreateClient("apim");
+        var target = ctx.Request.Path + ctx.Request.QueryString;
 
-        req.Content = new StreamContent(ctx.Request.Body);
+        using var req = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), target);
 
-        // Content-Type tem que ir no Content.Headers (n�o no req.Headers)
-        var ct = ctx.Request.ContentType;
-        if (!string.IsNullOrWhiteSpace(ct))
+        // Encaminha só os headers essenciais (evita header “estranho” quebrar o upstream)
+        if (ctx.Request.Headers.TryGetValue("Authorization", out var auth))
+            req.Headers.TryAddWithoutValidation("Authorization", auth.ToArray());
+
+        if (ctx.Request.Headers.TryGetValue("Accept", out var accept))
+            req.Headers.TryAddWithoutValidation("Accept", accept.ToArray());
+
+        // Se seu APIM exigir subscription key, configure no App Service:
+        // Upstreams__ApimSubscriptionKey = <key>
+        var subKey = cfg["Upstreams:ApimSubscriptionKey"];
+        if (!string.IsNullOrWhiteSpace(subKey))
+            req.Headers.TryAddWithoutValidation("Ocp-Apim-Subscription-Key", subKey);
+
+        // Body: copia para memória (evita problemas com stream não-seekable / já consumido)
+        var hasBody =
+            !HttpMethods.IsGet(ctx.Request.Method) &&
+            !HttpMethods.IsHead(ctx.Request.Method) &&
+            !HttpMethods.IsDelete(ctx.Request.Method) &&
+            (ctx.Request.ContentLength.GetValueOrDefault() > 0);
+
+        if (hasBody)
+        {
+            using var ms = new MemoryStream();
+            await ctx.Request.Body.CopyToAsync(ms, ctx.RequestAborted);
+            var bytes = ms.ToArray();
+
+            req.Content = new ByteArrayContent(bytes);
+
+            var ct = ctx.Request.ContentType ?? "application/json";
             req.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(ct);
-        else
-            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-    }
+        }
 
-    // Copia headers (exceto hop-by-hop e headers de content)
-    foreach (var h in ctx.Request.Headers)
+        using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
+
+        ctx.Response.StatusCode = (int)resp.StatusCode;
+
+        foreach (var h in resp.Headers)
+            ctx.Response.Headers[h.Key] = h.Value.ToArray();
+
+        foreach (var h in resp.Content.Headers)
+            ctx.Response.Headers[h.Key] = h.Value.ToArray();
+
+        ctx.Response.Headers.Remove("transfer-encoding");
+
+        // Debug útil
+        ctx.Response.Headers["X-Upstream"] = client.BaseAddress + target;
+        ctx.Response.Headers["X-TraceId"] = ctx.TraceIdentifier;
+
+        await resp.Content.CopyToAsync(ctx.Response.Body);
+    }
+    catch (Exception ex)
     {
-        var key = h.Key;
+        logger.LogError(ex, "Proxy failure TraceId={TraceId} Path={Path}", ctx.TraceIdentifier, ctx.Request.Path);
 
-        if (key.Equals("Host", StringComparison.OrdinalIgnoreCase)) continue;
-        if (key.Equals("Connection", StringComparison.OrdinalIgnoreCase)) continue;
-        if (key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
-        if (key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) continue; // IMPORTANT
-        if (key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)) continue;
-
-        if (!req.Headers.TryAddWithoutValidation(key, h.Value.ToArray()))
-            req.Content?.Headers.TryAddWithoutValidation(key, h.Value.ToArray());
+        ctx.Response.StatusCode = 502;
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsync(
+            $"{{\"status\":502,\"message\":\"Proxy error calling APIM\",\"traceId\":\"{ctx.TraceIdentifier}\"}}");
     }
-
-    // (Opcional) subscription key se necess�rio
-    var subKey = cfg["Upstreams:ApimSubscriptionKey"];
-    if (!string.IsNullOrWhiteSpace(subKey) && !req.Headers.Contains("Ocp-Apim-Subscription-Key"))
-        req.Headers.TryAddWithoutValidation("Ocp-Apim-Subscription-Key", subKey);
-
-    using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
-
-    ctx.Response.StatusCode = (int)resp.StatusCode;
-
-    foreach (var h in resp.Headers)
-        ctx.Response.Headers[h.Key] = h.Value.ToArray();
-
-    foreach (var h in resp.Content.Headers)
-        ctx.Response.Headers[h.Key] = h.Value.ToArray();
-
-    ctx.Response.Headers.Remove("transfer-encoding");
-
-    await resp.Content.CopyToAsync(ctx.Response.Body);
 }
